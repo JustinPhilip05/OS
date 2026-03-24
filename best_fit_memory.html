@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Best Fit Allocator</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: monospace; background: #f5f5f5; color: #111; padding: 30px 16px; font-size: 14px; }
+  h2 { font-size: 16px; font-weight: bold; margin-bottom: 20px; letter-spacing: 0.05em; }
+  .section { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 16px; margin-bottom: 14px; }
+  .section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: #666; margin-bottom: 12px; }
+  label { display: block; font-size: 12px; color: #555; margin-bottom: 4px; }
+  input[type=number], input[type=text] {
+    border: 1px solid #ccc; border-radius: 3px; padding: 6px 8px;
+    font-family: monospace; font-size: 13px; outline: none; background: #fafafa;
+  }
+  input:focus { border-color: #555; background: #fff; }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .row span { width: 28px; text-align: right; color: #888; font-size: 12px; flex-shrink: 0; }
+  .row input { flex: 1; }
+  .pid-input { width: 70px !important; flex: none !important; }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  button {
+    font-family: monospace; font-size: 12px; padding: 7px 16px;
+    border-radius: 3px; cursor: pointer; border: 1px solid #ccc;
+    background: #fff; transition: background 0.1s;
+  }
+  button:hover { background: #f0f0f0; }
+  button.primary { background: #111; color: #fff; border-color: #111; }
+  button.primary:hover { background: #333; }
+  button.danger { color: #c00; border-color: #c00; }
+  button.danger:hover { background: #fff0f0; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: #777; border-bottom: 1px solid #ddd; padding: 6px 8px; }
+  td { padding: 7px 8px; border-bottom: 1px solid #eee; }
+  .ok { color: #177a17; font-weight: bold; }
+  .fail { color: #c00; font-weight: bold; }
+
+  .mem-bar { display: flex; height: 28px; border: 1px solid #ddd; border-radius: 3px; overflow: hidden; margin: 10px 0; }
+  .seg { display: flex; align-items: center; justify-content: center; font-size: 11px; overflow: hidden; white-space: nowrap; border-right: 1px solid rgba(0,0,0,0.08); }
+  .seg.free     { background: #e8f5e9; color: #388e3c; }
+  .seg.used     { background: #e3f2fd; color: #1565c0; }
+  .seg.leftover { background: #fff8e1; color: #f57f17; }
+
+  .summary { font-size: 12px; color: #555; margin-top: 8px; line-height: 1.9; }
+  .summary b { color: #111; }
+
+  #log { font-size: 12px; color: #555; line-height: 1.9; max-height: 130px; overflow-y: auto; }
+  .l-ok   { color: #177a17; }
+  .l-fail { color: #c00; }
+  .l-info { color: #777; }
+
+  .count-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .count-row label { margin: 0; }
+  .count-row input { width: 60px; }
+</style>
+</head>
+<body>
+
+<h2>Best Fit Memory Allocator</h2>
+
+<div class="section">
+  <h3>Memory Blocks</h3>
+  <div class="count-row">
+    <label>Blocks:</label>
+    <input type="number" id="numBlocks" value="5" min="1" max="12" onchange="renderBlocks()">
+  </div>
+  <div id="blockRows"></div>
+</div>
+
+<div class="section">
+  <h3>Process Requests</h3>
+  <div class="count-row">
+    <label>Processes:</label>
+    <input type="number" id="numProcs" value="4" min="1" max="12" onchange="renderProcs()">
+  </div>
+  <div id="procRows"></div>
+</div>
+
+<div class="btn-row">
+  <button class="primary" onclick="allocate()">Allocate Memory</button>
+  <button onclick="nextRequest()">+ Next Request</button>
+  <button class="danger" onclick="resetAll()">Reset</button>
+</div>
+
+<div class="section" id="resultsSection" style="display:none;">
+  <h3>Result</h3>
+  <div id="memBar"></div>
+  <table>
+    <thead>
+      <tr><th>Process</th><th>Size (KB)</th><th>Block</th><th>Block Size (KB)</th><th>Int. Frag (KB)</th><th>Status</th></tr>
+    </thead>
+    <tbody id="resultBody"></tbody>
+  </table>
+  <div class="summary" id="summary"></div>
+</div>
+
+<div class="section">
+  <h3>Log</h3>
+  <div id="log">Ready.</div>
+</div>
+
+<script>
+window.onload = () => { renderBlocks(); renderProcs(); };
+
+function renderBlocks() {
+  const n = +document.getElementById('numBlocks').value || 1;
+  const def = [100,500,200,300,600,150,400,250,350,450];
+  let h = '';
+  for (let i = 0; i < n; i++)
+    h += `<div class="row"><span>B${i+1}</span><input type="number" id="b${i}" value="${def[i]||100}" min="1" placeholder="Size KB"></div>`;
+  document.getElementById('blockRows').innerHTML = h;
+}
+
+function renderProcs() {
+  const n = +document.getElementById('numProcs').value || 1;
+  const def = [212,417,112,426,95,180,300,150];
+  let h = '';
+  for (let i = 0; i < n; i++)
+    h += `<div class="row"><span>P${i+1}</span><input type="text" class="pid-input" id="pid${i}" value="P${i+1}"><input type="number" id="p${i}" value="${def[i]||100}" min="1" placeholder="Size KB"></div>`;
+  document.getElementById('procRows').innerHTML = h;
+}
+
+function allocate() {
+  const nb = +document.getElementById('numBlocks').value;
+  const np = +document.getElementById('numProcs').value;
+
+  const blocks = [];
+  for (let i = 0; i < nb; i++) {
+    const v = +document.getElementById(`b${i}`).value;
+    if (!v) { log(`Block B${i+1} invalid`, 'fail'); return; }
+    blocks.push({ id: i+1, size: v, rem: v, pid: null });
+  }
+
+  const procs = [];
+  for (let i = 0; i < np; i++) {
+    const pid = document.getElementById(`pid${i}`).value.trim() || `P${i+1}`;
+    const size = +document.getElementById(`p${i}`).value;
+    if (!size) { log(`Process ${pid} invalid`, 'fail'); return; }
+    procs.push({ pid, size });
+  }
+
+  log('--- Run ---', 'info');
+  const results = [];
+
+  procs.forEach(p => {
+    let best = -1, bestDiff = Infinity;
+    blocks.forEach((b, i) => {
+      if (b.rem >= p.size && (b.rem - p.size) < bestDiff) {
+        bestDiff = b.rem - p.size; best = i;
+      }
+    });
+    if (best === -1) {
+      results.push({ ...p, block: null, blockSize: null, frag: null, ok: false });
+      log(`✗ ${p.pid} (${p.size} KB) → no suitable block`, 'fail');
+    } else {
+      const b = blocks[best];
+      const frag = b.rem - p.size;
+      results.push({ ...p, block: b.id, blockSize: b.size, frag, ok: true });
+      log(`✓ ${p.pid} (${p.size} KB) → B${b.id} (${b.size} KB), int. frag = ${frag} KB`, 'ok');
+      b.rem = frag;
+      b.pid = p.pid;
+    }
+  });
+
+  showResults(results, blocks);
+}
+
+function showResults(results, blocks) {
+  document.getElementById('resultsSection').style.display = '';
+
+  const total = blocks.reduce((s, b) => s + b.size, 0);
+  let bar = '<div class="mem-bar">';
+  blocks.forEach(b => {
+    const used = b.size - b.rem;
+    if (used > 0) bar += `<div class="seg used" style="width:${used/total*100}%">${b.pid||''}</div>`;
+    if (b.rem  > 0) bar += `<div class="seg ${b.pid?'leftover':'free'}" style="width:${b.rem/total*100}%"></div>`;
+  });
+  bar += '</div>';
+  document.getElementById('memBar').innerHTML = bar;
+
+  let rows = '';
+  results.forEach(r => {
+    rows += `<tr>
+      <td>${r.pid}</td><td>${r.size}</td>
+      <td>${r.block ? 'B'+r.block : '—'}</td>
+      <td>${r.blockSize ?? '—'}</td>
+      <td>${r.frag ?? '—'}</td>
+      <td class="${r.ok?'ok':'fail'}">${r.ok?'Allocated':'Failed'}</td>
+    </tr>`;
+  });
+  document.getElementById('resultBody').innerHTML = rows;
+
+  const intFrag = results.reduce((s,r) => s+(r.frag||0), 0);
+  const extFrag = blocks.reduce((s,b) => s + (b.pid ? 0 : b.rem), 0);
+  const ok = results.filter(r=>r.ok).length;
+  document.getElementById('summary').innerHTML =
+    `Allocated: <b>${ok}/${results.length}</b> &nbsp;·&nbsp; Internal Fragmentation: <b>${intFrag} KB</b> &nbsp;·&nbsp; External Fragmentation: <b>${extFrag} KB</b>`;
+}
+
+function nextRequest() {
+  const n = +document.getElementById('numProcs').value;
+  document.getElementById('numProcs').value = n + 1;
+  renderProcs();
+}
+
+function resetAll() {
+  document.getElementById('numBlocks').value = 5;
+  document.getElementById('numProcs').value = 4;
+  renderBlocks(); renderProcs();
+  document.getElementById('resultsSection').style.display = 'none';
+  document.getElementById('log').innerHTML = 'Ready.';
+}
+
+function log(msg, type) {
+  const el = document.getElementById('log');
+  el.innerHTML += `<br><span class="l-${type}">${msg}</span>`;
+  el.scrollTop = el.scrollHeight;
+}
+</script>
+</body>
+</html>
